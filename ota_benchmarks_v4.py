@@ -13,6 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, Subset
+import io, zipfile, urllib.request
 
 try:
     import torchvision
@@ -77,6 +78,41 @@ def freeze_all(model: nn.Module):
     for p in model.parameters():
         p.requires_grad_(False)
 
+
+def prepare_ucihar(root: str):
+    needed = [os.path.join(root, f) for f in ["X_train.npy","y_train.npy","X_test.npy","y_test.npy"]]
+    if all(os.path.isfile(p) for p in needed):
+        print("[UCIHAR] Found preprocessed .npy files.")
+        return
+    os.makedirs(root, exist_ok=True)
+    url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00240/UCI%20HAR%20Dataset.zip"
+    print("[UCIHAR] Downloading dataset zip...")
+    with urllib.request.urlopen(url) as resp:
+        data = resp.read()
+    z = zipfile.ZipFile(io.BytesIO(data))
+    base = "UCI HAR Dataset/"
+    signals = ["body_acc_x_","body_acc_y_","body_acc_z_",
+               "body_gyro_x_","body_gyro_y_","body_gyro_z_",
+               "total_acc_x_","total_acc_y_","total_acc_z_"]
+    def load_txt(zf, path):
+        with zf.open(path, "r") as f:
+            return np.loadtxt(f)
+    X_out, y_out = {}, {}
+    for split in ["train","test"]:
+        y = load_txt(z, base + f"{split}/y_{split}.txt").astype(np.int64) - 1
+        chans = []
+        for sig in signals:
+            a = load_txt(z, base + f"{split}/Inertial Signals/{sig}{split}.txt")  # [N,128]
+            a = a[:, :, None]  # -> [N,128,1]
+            chans.append(a)
+        X = np.concatenate(chans, axis=2)  # [N,128,9]
+        X_out[split], y_out[split] = X, y
+    np.save(os.path.join(root,"X_train.npy"), X_out["train"])
+    np.save(os.path.join(root,"y_train.npy"), y_out["train"])
+    np.save(os.path.join(root,"X_test.npy" ), X_out["test"])
+    np.save(os.path.join(root,"y_test.npy"), y_out["test"])
+    print("[UCIHAR] Built X/y .npy files at", root)
+    
 
 def count_parameters(model: nn.Module):
     return sum(p.numel() for p in model.parameters())
@@ -273,6 +309,7 @@ def make_mnist(root: str, subset_ratio: float, batch_size: int, seed: int):
 
 
 def make_ucihar(root: str, subset_ratio: float, batch_size: int, seed: int):
+    prepare_ucihar(root)
     train = UCIHAR(root, split="train")
     test = UCIHAR(root, split="test")
     n = len(train)
@@ -287,7 +324,7 @@ def make_ucihar(root: str, subset_ratio: float, batch_size: int, seed: int):
 
 
 def make_kws(root: str, subset_ratio: float, batch_size: int, seed: int, labels: List[str]):
-    train = SpeechCommandsSubset(root=root, subset_labels=labels, split="train")
+    train = SpeechCommandsSubset(root=root, subset_labels=labels, split="training")
     test = SpeechCommandsSubset(root=root, subset_labels=labels, split="testing")
     n = len(train)
     m = int(n * subset_ratio)
